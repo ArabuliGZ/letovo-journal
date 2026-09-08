@@ -26,7 +26,7 @@ type Criterion = string;
 type FinalCriterion = "A" | "B" | "C" | "D";
 type MetaSkill = "selfManagement" | "criticalThinking" | "communication" | "collaboration";
 type Lesson = { id: number; isoDate: string; date: string; short: string; weekday: string; topic: string; homework: string; homeworkDueDate: string; homeworkMinutes: number; criterion: Criterion; assessmentName: string };
-type Student = { id: number; name: string; grades: Record<number, string>; criterionFinals: Record<FinalCriterion, string>; metaSkills?: Record<MetaSkill, string> };
+type Student = { id: number; name: string; grades: Record<number, string>; criterionFinals: Record<FinalCriterion, string>; criterionFinals2?: Record<FinalCriterion, string>; metaSkills?: Record<MetaSkill, string>; annualFinal?: string };
 type PlanRow = { id: number; unit: string; topic: string; hours: number; criterion: Criterion; assessmentName: string; homework: string; homeworkMinutes: number };
 type SchoolClass = { id: string; name: string; level: string };
 type Curriculum = { id: string; name: string; subject: string; level: string; classIds: string[]; rows: PlanRow[]; modules: string[] };
@@ -70,21 +70,25 @@ const CRITERIA: Record<number, Criterion> = { 8: "A", 16: "B", 24: "C", 32: "D",
 function formatDate(date: Date) {
   const day = String(date.getUTCDate()).padStart(2, "0");
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return { full: `${day}.${month}.2026`, short: `${day}.${month}`, iso: `2026-${month}-${day}` };
+  const year = date.getUTCFullYear();
+  return { full: `${day}.${month}.${year}`, short: `${day}.${month}`, iso: `${year}-${month}-${day}` };
 }
 
 function makeLessons(): Lesson[] {
   const result: Omit<Lesson, "homeworkDueDate" | "homeworkMinutes">[] = [];
   const cursor = new Date(Date.UTC(2026, 8, 8));
-  const end = new Date(Date.UTC(2026, 11, 24));
+  const end = new Date(Date.UTC(2027, 4, 27));
+  const firstSemesterEnd = new Date(Date.UTC(2026, 11, 24));
+  const secondSemesterStart = new Date(Date.UTC(2027, 0, 12));
   while (cursor <= end) {
     const day = cursor.getUTCDay();
-    if (day === 2 || day === 4) {
+    const isTeachingPeriod = cursor <= firstSemesterEnd || cursor >= secondSemesterStart;
+    if ((day === 2 || day === 4) && isTeachingPeriod) {
       for (let pair = 0; pair < 2; pair++) {
         const id = result.length + 1;
         const formatted = formatDate(cursor);
         const criterion = CRITERIA[id] || "";
-        result.push({ id, isoDate: formatted.iso, date: formatted.full, short: formatted.short, weekday: day === 2 ? "вт" : "чт", topic: TOPICS[id - 1], homework: id === 64 ? "Нет" : `§ ${id}, задачи ${id}.1–${id}.3`, criterion, assessmentName: criterion ? (criterion === "F" ? "Формирующая работа" : `Оценивание по критерию ${criterion}`) : "" });
+        result.push({ id, isoDate: formatted.iso, date: formatted.full, short: formatted.short, weekday: day === 2 ? "вт" : "чт", topic: TOPICS[id - 1] || "", homework: id <= TOPICS.length ? (id === 64 ? "Нет" : `§ ${id}, задачи ${id}.1–${id}.3`) : "", criterion, assessmentName: criterion ? (criterion === "F" ? "Формирующая работа" : `Оценивание по критерию ${criterion}`) : "" });
       }
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -109,8 +113,8 @@ const INITIAL_STUDENTS: Student[] = [
   { id: 8, name: "Ильин Роман", grades: { 8: "6", 16: "7", 24: "6", 32: "6", 40: "7", 48: "7", 56: "6" }, criterionFinals: { A: "7", B: "6", C: "6", D: "6" } }
 ];
 
-const INITIAL_PLAN: PlanRow[] = LESSONS.map(lesson => ({
-  id: lesson.id, unit: lesson.id <= 16 ? "Кинематика" : lesson.id <= 32 ? "Динамика" : lesson.id <= 48 ? "Статика и колебания" : "Электромагнитное поле", topic: lesson.topic, hours: 1, criterion: lesson.criterion,
+const INITIAL_PLAN: PlanRow[] = LESSONS.slice(0, TOPICS.length).map(lesson => ({
+  id: lesson.id, unit: lesson.id <= 16 ? "Кинематика" : lesson.id <= 32 ? "Динамика" : lesson.id <= 48 ? "Статика и колебания" : "Электромагнитное поле", topic: lesson.topic, hours: 2, criterion: lesson.criterion,
   assessmentName: lesson.criterion ? (lesson.criterion === "F" ? "Формирующая работа" : `Критерий ${lesson.criterion}`) : "",
   homework: lesson.homework,
   homeworkMinutes: lesson.homework === "Нет" ? 0 : 20 + (lesson.id % 4) * 5
@@ -211,11 +215,13 @@ function loadStudents(): Student[] {
 }
 
 function loadCurricula(): Curriculum[] {
+  const current = loadState<Curriculum[]>("journal-curricula-v2", []);
+  if (current.length) return current;
   const saved = loadState<Curriculum[]>("journal-curricula-v1", []);
-  if (saved.length) return saved;
+  if (saved.length) return saved.map(curriculum => ({ ...curriculum, rows: curriculum.rows.map(row => ({ ...row, hours: 2 })) }));
   const legacyRows = loadState("journal-plan-v5", INITIAL_PLAN);
   const legacyModules = loadState<string[]>("journal-modules-v1", [...new Set(legacyRows.map(row => row.unit).filter(Boolean))]);
-  return [{ ...INITIAL_CURRICULA[0], rows: legacyRows, modules: legacyModules }, ...INITIAL_CURRICULA.slice(1)];
+  return [{ ...INITIAL_CURRICULA[0], rows: legacyRows.map(row => ({ ...row, hours: 2 })), modules: legacyModules }, ...INITIAL_CURRICULA.slice(1)];
 }
 
 function applyPlanRows(lessons: Lesson[], rows: PlanRow[]): Lesson[] {
@@ -271,8 +277,15 @@ function demoStudents(classId: string, classIndex: number): Student[] {
 }
 
 function loadClassJournals(curricula: Curriculum[]): ClassJournal[] {
-  const current = loadState<ClassJournal[]>("journal-class-journals-v2", []);
+  const current = loadState<ClassJournal[]>("journal-class-journals-v3", []);
   if (current.length) return current;
+  const previous = loadState<ClassJournal[]>("journal-class-journals-v2", []);
+  if (previous.length) return previous.map(journal => {
+    const curriculum = curricula.find(item => item.classIds.includes(journal.classId));
+    const fullYear = lessonsForCurriculum(curriculum);
+    const savedById = new Map(journal.lessons.map(lesson => [lesson.id, lesson]));
+    return { ...journal, lessons: fullYear.map(lesson => savedById.get(lesson.id) || lesson) };
+  });
   const saved = loadState<ClassJournal[]>("journal-class-journals-v1", []);
   if (saved.length) return saved.map(journal => {
     const curriculum = curricula.find(item => item.classIds.includes(journal.classId));
@@ -303,9 +316,9 @@ function App() {
   const [importName, setImportName] = useState("");
   const [importStatus, setImportStatus] = useState("");
 
-  useEffect(() => localStorage.setItem("journal-class-journals-v2", JSON.stringify(classJournals)), [classJournals]);
+  useEffect(() => localStorage.setItem("journal-class-journals-v3", JSON.stringify(classJournals)), [classJournals]);
   useEffect(() => localStorage.setItem("journal-active-class-v1", JSON.stringify(activeClassId)), [activeClassId]);
-  useEffect(() => localStorage.setItem("journal-curricula-v1", JSON.stringify(curricula)), [curricula]);
+  useEffect(() => localStorage.setItem("journal-curricula-v2", JSON.stringify(curricula)), [curricula]);
   useEffect(() => localStorage.setItem("journal-active-curriculum-v1", JSON.stringify(activeCurriculumId)), [activeCurriculumId]);
 
   const activeClass = SCHOOL_CLASSES.find(item => item.id === activeClassId) || SCHOOL_CLASSES[0];
@@ -332,11 +345,18 @@ function App() {
     setStudents(items => items.map(s => s.id === studentId ? { ...s, grades: { ...s.grades, [lessonId]: clean } } : s));
   };
 
-  const setCriterionFinal = (studentId: number, criterion: FinalCriterion, value: string) => {
+  const setCriterionFinal = (studentId: number, criterion: FinalCriterion, value: string, semester: 1 | 2 = 1) => {
     const clean = value.replace(/[^0-8]/g, "").slice(-1);
     setStudents(items => items.map(student => student.id === studentId
-      ? { ...student, criterionFinals: { ...student.criterionFinals, [criterion]: clean } }
+      ? semester === 1
+        ? { ...student, criterionFinals: { ...student.criterionFinals, [criterion]: clean } }
+        : { ...student, criterionFinals2: { A: "", B: "", C: "", D: "", ...student.criterionFinals2, [criterion]: clean } }
       : student));
+  };
+
+  const setAnnualFinal = (studentId: number, value: string) => {
+    const clean = value.replace(/[^1-7]/g, "").slice(-1);
+    setStudents(items => items.map(student => student.id === studentId ? { ...student, annualFinal: clean } : student));
   };
 
   const setMetaSkill = (studentId: number, skill: MetaSkill, value: string) => {
@@ -554,7 +574,7 @@ function App() {
         {tab === "journal" && <div className="selectors"><label>Класс<select value={activeClass.id} onChange={event => { setActiveClassId(event.target.value); setSelectedLesson(null); }}>{SCHOOL_CLASSES.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Предмет<select><option>Физика</option></select></label></div>}
       </div>
 
-      {tab === "journal" && <Journal className={activeClass.name} curriculumName={linkedCurriculum?.name} students={students} lessons={lessons} plannedLessons={lessonsForCurriculum(linkedCurriculum)} setGrade={setGrade} setCriterionFinal={setCriterionFinal} setMetaSkill={setMetaSkill} setLessonTopic={setLessonTopic} onLesson={setSelectedLesson} />}
+      {tab === "journal" && <Journal className={activeClass.name} curriculumName={linkedCurriculum?.name} students={students} lessons={lessons} plannedLessons={lessonsForCurriculum(linkedCurriculum)} setGrade={setGrade} setCriterionFinal={setCriterionFinal} setMetaSkill={setMetaSkill} setAnnualFinal={setAnnualFinal} setLessonTopic={setLessonTopic} onLesson={setSelectedLesson} />}
       {tab === "plan" && <Plan curricula={curricula} activeCurriculum={activeCurriculum} classes={SCHOOL_CLASSES} onSelect={selectCurriculum} onCreate={()=>setNewCurriculum({ name: "", level: "9 класс", classIds: [] })} onAddClass={()=>setAddingClassIds(activeCurriculum?.classIds || [])} rows={plan} modules={modules} onEdit={setEditingPlan} onAdd={addPlanRow} onAddModule={()=>setNewModuleName("")} onDelete={deletePlanRow} onMove={movePlanRow} onMoveModule={moveModule} importName={importName} importStatus={importStatus} onImport={importPlan} />}
       {tab === "schedule" && <Schedule weekOffset={weekOffset} setWeekOffset={setWeekOffset} classes={SCHOOL_CLASSES} classJournals={classJournals} />}
     </main>
@@ -567,11 +587,14 @@ function App() {
   </div>;
 }
 
-function Journal({ className, curriculumName, students, lessons, plannedLessons, setGrade, setCriterionFinal, setMetaSkill, setLessonTopic, onLesson }: { className:string; curriculumName?:string; students: Student[]; lessons: Lesson[]; plannedLessons:Lesson[]; setGrade: (s:number,l:number,v:string)=>void; setCriterionFinal: (s:number,c:FinalCriterion,v:string)=>void; setMetaSkill:(s:number,m:MetaSkill,v:string)=>void; setLessonTopic:(lessonId:number,topic:string)=>void; onLesson:(l:Lesson)=>void }) {
+function Journal({ className, curriculumName, students, lessons, plannedLessons, setGrade, setCriterionFinal, setMetaSkill, setAnnualFinal, setLessonTopic, onLesson }: { className:string; curriculumName?:string; students: Student[]; lessons: Lesson[]; plannedLessons:Lesson[]; setGrade: (s:number,l:number,v:string)=>void; setCriterionFinal: (s:number,c:FinalCriterion,v:string,semester:1|2)=>void; setMetaSkill:(s:number,m:MetaSkill,v:string)=>void; setAnnualFinal:(s:number,v:string)=>void; setLessonTopic:(lessonId:number,topic:string)=>void; onLesson:(l:Lesson)=>void }) {
   const [journalView, setJournalView] = useState<"grades" | "topics">("grades");
+  const [semester, setSemester] = useState<1 | 2>(1);
   const criteria: FinalCriterion[] = ["A", "B", "C", "D"];
   const monthNames = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
-  const monthGroups = lessons.reduce<Array<{ key: string; name: string; count: number }>>((groups, lesson) => {
+  const visibleLessons = lessons.filter(lesson => semester === 1 ? lesson.isoDate < "2027-01-01" : lesson.isoDate >= "2027-01-01");
+  const visiblePlannedLessons = plannedLessons.filter(lesson => semester === 1 ? lesson.isoDate < "2027-01-01" : lesson.isoDate >= "2027-01-01");
+  const monthGroups = visibleLessons.reduce<Array<{ key: string; name: string; count: number }>>((groups, lesson) => {
     const key = lesson.isoDate.slice(0, 7);
     const current = groups.at(-1);
     if (current?.key === key) current.count += 1;
@@ -579,7 +602,7 @@ function Journal({ className, curriculumName, students, lessons, plannedLessons,
     return groups;
   }, []);
   const hasHomework = (lesson: Lesson) => Boolean(lesson.homework.trim()) && lesson.homework.trim().toLowerCase() !== "нет";
-  const homeworkDueDates = new Set(lessons.filter(hasHomework).map(lesson => dateToIso(lesson.homeworkDueDate)).filter(Boolean));
+  const homeworkDueDates = new Set(visibleLessons.filter(hasHomework).map(lesson => dateToIso(lesson.homeworkDueDate)).filter(Boolean));
   const moveGradeFocus = (event: React.KeyboardEvent<HTMLInputElement>, row: number, column: number) => {
     const directions: Partial<Record<string, [number, number]>> = {
       ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0]
@@ -596,15 +619,17 @@ function Journal({ className, curriculumName, students, lessons, plannedLessons,
     target.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   const averageFor = (student: Student, criterion: FinalCriterion) => {
-    const ids = lessons.filter(l => l.criterion !== "F" && l.criterion.includes(criterion)).map(l => l.id);
+    const ids = visibleLessons.filter(l => l.criterion !== "F" && l.criterion.includes(criterion)).map(l => l.id);
     const values = ids.flatMap(id => {
       const raw = student.grades[id];
       return raw !== undefined && raw !== "" && raw !== "н" ? [Number(raw)] : [];
     });
     return values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : "—";
   };
-  const finalSum = (student: Student) => {
-    const values = criteria.map(criterion => student.criterionFinals[criterion]);
+  const finalsFor = (student: Student, targetSemester: 1 | 2) => targetSemester === 1 ? student.criterionFinals : (student.criterionFinals2 || { A: "", B: "", C: "", D: "" });
+  const finalSum = (student: Student, targetSemester: 1 | 2) => {
+    const finals = finalsFor(student, targetSemester);
+    const values = criteria.map(criterion => finals[criterion]);
     return values.every(value => value !== "") ? values.reduce((sum, value) => sum + Number(value), 0) : null;
   };
   const semesterGrade = (sum: number | null) => {
@@ -617,26 +642,29 @@ function Journal({ className, curriculumName, students, lessons, plannedLessons,
     if (sum <= 27) return "6";
     return "7";
   };
-  return <div className="journal-workspace"><div className="journal-subtabs" role="tablist" aria-label="Раздел журнала"><button className={journalView === "grades" ? "active" : ""} role="tab" aria-selected={journalView === "grades"} onClick={() => setJournalView("grades")}>Оценки</button><button className={journalView === "topics" ? "active" : ""} role="tab" aria-selected={journalView === "topics"} onClick={() => setJournalView("topics")}>Темы уроков</button></div>{journalView === "topics" ? <LessonTopics className={className} curriculumName={curriculumName} lessons={lessons} plannedLessons={plannedLessons} onTopicChange={setLessonTopic} onLesson={onLesson}/> : <section className="panel journal-panel">
-    <div className="panel-head"><div><strong>{className} · 1 семестр</strong><span>8 сентября — 24 декабря · {lessons.length} урока · {curriculumName ? `КТП: ${curriculumName}` : "КТП не назначен"}</span></div><div className="legend"><span><b className="criterion-badge criterion-a">A</b>Знание</span><span><b className="criterion-badge criterion-b">B</b>Исследование</span><span><b className="criterion-badge criterion-c">C</b>Коммуникация</span><span><b className="criterion-badge criterion-d">D</b>Применение</span><span><b className="criterion-badge criterion-f">F</b>Формирующее</span></div></div>
+  return <div className="journal-workspace"><div className="journal-toolbar"><div className="journal-subtabs" role="tablist" aria-label="Раздел журнала"><button className={journalView === "grades" ? "active" : ""} role="tab" aria-selected={journalView === "grades"} onClick={() => setJournalView("grades")}>Оценки</button><button className={journalView === "topics" ? "active" : ""} role="tab" aria-selected={journalView === "topics"} onClick={() => setJournalView("topics")}>Темы уроков</button></div><div className="semester-switch" aria-label="Полугодие"><button className={semester === 1 ? "active" : ""} onClick={() => setSemester(1)}>1 полугодие</button><button className={semester === 2 ? "active" : ""} onClick={() => setSemester(2)}>2 полугодие</button></div></div>{journalView === "topics" ? <LessonTopics className={className} curriculumName={curriculumName} lessons={visibleLessons} plannedLessons={visiblePlannedLessons} onTopicChange={setLessonTopic} onLesson={onLesson}/> : <section className="panel journal-panel">
+    <div className="panel-head"><div><strong>{className} · {semester} полугодие</strong><span>{semester === 1 ? "8 сентября — 24 декабря 2026" : "12 января — 27 мая 2027"} · {visibleLessons.length} уроков · {curriculumName ? `КТП: ${curriculumName}` : "КТП не назначен"}</span></div><div className="legend"><span><b className="criterion-badge criterion-a">A</b>Знание</span><span><b className="criterion-badge criterion-b">B</b>Исследование</span><span><b className="criterion-badge criterion-c">C</b>Коммуникация</span><span><b className="criterion-badge criterion-d">D</b>Применение</span><span><b className="criterion-badge criterion-f">F</b>Формирующее</span></div></div>
     <div className="table-scroll"><table className="journal-table"><thead>
-      <tr className="month-row"><th className="student sticky" rowSpan={2}>Ученик</th>{monthGroups.map(month => <th className="month-heading" colSpan={month.count} key={month.key}>{month.name}</th>)}<th className="criterion-section average-section" colSpan={4}>Средние баллы</th><th className="criterion-section final-section" colSpan={4}>Итог за критерий</th><th className="total-heading" rowSpan={2}>Сумма</th><th className="semester-heading" rowSpan={2}>Семестр</th><th className="meta-section" colSpan={4}>Метапредметные навыки · 0–4</th></tr>
-      <tr>{lessons.map((lesson, index) => {
+      <tr className="month-row"><th className="student sticky" rowSpan={2}>Ученик</th>{monthGroups.map(month => <th className="month-heading" colSpan={month.count} key={month.key}>{month.name}</th>)}<th className="criterion-section average-section" colSpan={4}>Средние баллы</th><th className="criterion-section final-section" colSpan={4}>Итог за критерий · {semester} полугодие</th><th className="total-heading" rowSpan={2}>Сумма</th><th className="semester-heading" rowSpan={2}>1 сем.</th><th className="semester-heading semester-two-heading" rowSpan={2}>2 сем.</th><th className="meta-section" colSpan={4}>Метапредметные навыки · 0–4</th><th className="annual-heading" rowSpan={2}>Годовая</th></tr>
+      <tr>{visibleLessons.map((lesson, index) => {
         const topicMissing = !lesson.topic.trim();
         const homeworkAssigned = hasHomework(lesson);
-        const homeworkDue = homeworkDueDates.has(lesson.isoDate) && lessons.findIndex(item => item.isoDate === lesson.isoDate) === index;
+        const homeworkDue = homeworkDueDates.has(lesson.isoDate) && visibleLessons.findIndex(item => item.isoDate === lesson.isoDate) === index;
         return <th className={`lesson-heading${topicMissing ? " no-topic-heading" : ""}`} key={lesson.id}><button className="date-button" title={topicMissing ? `${lesson.date}: тема не указана` : `${lesson.date}: ${lesson.topic}`} onClick={() => onLesson(lesson)}><span>{lesson.isoDate.slice(-2)}</span><small>{lesson.weekday}{lesson.criterion && <b className={`mini-criterion criterion-${lesson.criterion.toLowerCase()}`}>{lesson.criterion}</b>}</small><span className="lesson-markers">{topicMissing && <AlertCircle size={11} className="lesson-marker missing-topic-marker" aria-label="Тема не указана"/>}{homeworkAssigned && <ArrowRight size={12} className="lesson-marker homework-assigned-marker" aria-label="В этот урок задано домашнее задание"/>}{homeworkDue && <Flag size={11} className="lesson-marker homework-due-marker" aria-label="На этот день задано домашнее задание"/>}</span></button></th>;
       })}{criteria.map(criterion => <th className={`summary-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-average`}>Ср. {criterion}</th>)}{criteria.map(criterion => <th className={`summary-head final-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-final`}>Итог {criterion}</th>)}{META_SKILLS.map(skill => <th className="meta-heading" title={skill.label} key={skill.id}>{skill.short}</th>)}</tr>
     </thead>
     <tbody>{students.map((student, idx) => {
-      const sum = finalSum(student);
-      return <tr key={student.id}><td className="student sticky"><span className="row-number">{idx+1}</span>{student.name}</td>{lessons.map((lesson, lessonIndex) => <td key={lesson.id} className={!lesson.criterion ? "no-assessment" : ""}><input inputMode="numeric" data-grade-row={idx} data-grade-column={lessonIndex} aria-label={`${student.name}, ${lesson.date}${lesson.criterion ? `, критерий ${lesson.criterion}` : ", без оценивания"}`} className={`grade-input score-${student.grades[lesson.id] || "empty"}`} value={student.grades[lesson.id] || ""} onKeyDown={event => moveGradeFocus(event, idx, lessonIndex)} onChange={event=>setGrade(student.id,lesson.id,event.target.value)} /></td>)}{criteria.map(criterion => <td className="summary-cell" key={`${criterion}-average`}><strong className={`criterion-average criterion-${criterion.toLowerCase()}`}>{averageFor(student,criterion)}</strong></td>)}{criteria.map((criterion, criterionIndex) => {
-        const column = lessons.length + criterionIndex;
-        return <td className="summary-cell final-cell" key={`${criterion}-final`}><input inputMode="numeric" data-grade-row={idx} data-grade-column={column} aria-label={`${student.name}, итог за критерий ${criterion}`} className={`final-score-input score-${student.criterionFinals[criterion] || "empty"}`} value={student.criterionFinals[criterion]} onKeyDown={event => moveGradeFocus(event, idx, column)} onChange={event => setCriterionFinal(student.id, criterion, event.target.value)} /></td>;
-      })}<td className="sum-cell">{sum ?? "—"}</td><td className="semester-cell"><strong>{semesterGrade(sum)}</strong></td>{META_SKILLS.map((skill, skillIndex) => {
-        const column = lessons.length + criteria.length + skillIndex;
+      const currentFinals = finalsFor(student, semester);
+      const sum = finalSum(student, semester);
+      const semesterOne = semesterGrade(finalSum(student, 1));
+      const semesterTwo = semesterGrade(finalSum(student, 2));
+      return <tr key={student.id}><td className="student sticky"><span className="row-number">{idx+1}</span>{student.name}</td>{visibleLessons.map((lesson, lessonIndex) => <td key={lesson.id} className={!lesson.criterion ? "no-assessment" : ""}><input inputMode="numeric" data-grade-row={idx} data-grade-column={lessonIndex} aria-label={`${student.name}, ${lesson.date}${lesson.criterion ? `, критерий ${lesson.criterion}` : ", без оценивания"}`} className={`grade-input score-${student.grades[lesson.id] || "empty"}`} value={student.grades[lesson.id] || ""} onKeyDown={event => moveGradeFocus(event, idx, lessonIndex)} onChange={event=>setGrade(student.id,lesson.id,event.target.value)} /></td>)}{criteria.map(criterion => <td className="summary-cell" key={`${criterion}-average`}><strong className={`criterion-average criterion-${criterion.toLowerCase()}`}>{averageFor(student,criterion)}</strong></td>)}{criteria.map((criterion, criterionIndex) => {
+        const column = visibleLessons.length + criterionIndex;
+        return <td className="summary-cell final-cell" key={`${criterion}-final`}><input inputMode="numeric" data-grade-row={idx} data-grade-column={column} aria-label={`${student.name}, итог за критерий ${criterion}, ${semester} полугодие`} className={`final-score-input score-${currentFinals[criterion] || "empty"}`} value={currentFinals[criterion]} onKeyDown={event => moveGradeFocus(event, idx, column)} onChange={event => setCriterionFinal(student.id, criterion, event.target.value, semester)} /></td>;
+      })}<td className="sum-cell">{sum ?? "—"}</td><td className="semester-cell"><strong>{semesterOne}</strong></td><td className="semester-cell semester-two-cell"><strong>{semesterTwo}</strong></td>{META_SKILLS.map((skill, skillIndex) => {
+        const column = visibleLessons.length + criteria.length + skillIndex;
         return <td className="meta-cell" key={skill.id}><input inputMode="numeric" data-grade-row={idx} data-grade-column={column} aria-label={`${student.name}, ${skill.label}`} className={`meta-score-input meta-score-${student.metaSkills?.[skill.id] || "empty"}`} value={student.metaSkills?.[skill.id] || ""} onKeyDown={event => moveGradeFocus(event, idx, column)} onChange={event => setMetaSkill(student.id, skill.id, event.target.value)}/></td>;
-      })}</tr>;
+      })}<td className="annual-cell"><input inputMode="numeric" data-grade-row={idx} data-grade-column={visibleLessons.length + criteria.length + META_SKILLS.length} aria-label={`${student.name}, годовая итоговая оценка`} className={`annual-score-input score-${student.annualFinal || "empty"}`} value={student.annualFinal || ""} onKeyDown={event => moveGradeFocus(event, idx, visibleLessons.length + criteria.length + META_SKILLS.length)} onChange={event => setAnnualFinal(student.id, event.target.value)}/></td></tr>;
     })}</tbody></table></div>
     <div className="panel-foot"><span>Оценку 0–8 или «н» можно поставить за любой урок</span><span className="journal-mark-legend"><b><ArrowRight size={13}/>ДЗ задано</b><b><Flag size={12}/>ДЗ сдать</b><b><AlertCircle size={12}/>Нет темы</b></span><span>Средние считаются по A–D; итог за критерий выставляет учитель</span></div>
   </section>}</div>;
