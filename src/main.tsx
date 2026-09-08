@@ -556,7 +556,7 @@ function App() {
 
       {tab === "journal" && <Journal className={activeClass.name} curriculumName={linkedCurriculum?.name} students={students} lessons={lessons} plannedLessons={lessonsForCurriculum(linkedCurriculum)} setGrade={setGrade} setCriterionFinal={setCriterionFinal} setMetaSkill={setMetaSkill} setLessonTopic={setLessonTopic} onLesson={setSelectedLesson} />}
       {tab === "plan" && <Plan curricula={curricula} activeCurriculum={activeCurriculum} classes={SCHOOL_CLASSES} onSelect={selectCurriculum} onCreate={()=>setNewCurriculum({ name: "", level: "9 класс", classIds: [] })} onAddClass={()=>setAddingClassIds(activeCurriculum?.classIds || [])} rows={plan} modules={modules} onEdit={setEditingPlan} onAdd={addPlanRow} onAddModule={()=>setNewModuleName("")} onDelete={deletePlanRow} onMove={movePlanRow} onMoveModule={moveModule} importName={importName} importStatus={importStatus} onImport={importPlan} />}
-      {tab === "schedule" && <Schedule weekOffset={weekOffset} setWeekOffset={setWeekOffset} lessons={lessons} className={activeClass.name} />}
+      {tab === "schedule" && <Schedule weekOffset={weekOffset} setWeekOffset={setWeekOffset} classes={SCHOOL_CLASSES} classJournals={classJournals} />}
     </main>
 
     {selectedLesson && <LessonDialog lesson={selectedLesson} className={activeClass.name} onClose={() => setSelectedLesson(null)} onSave={saveLesson} />}
@@ -677,9 +677,17 @@ function Plan({ curricula, activeCurriculum, classes, onSelect, onCreate, onAddC
   <div className="table-scroll"><table className="plan-table"><thead><tr><th>№</th><th>Тема урока</th><th>Часы</th><th>Оценивание</th><th>Название оценивания</th><th>Домашнее задание</th><th>Время</th><th>Действия</th></tr></thead><tbody>{visibleModules.map((module,moduleIndex)=>{const moduleRows=rows.filter(row=>row.unit===module);return <React.Fragment key={module}><tr className="module-row"><td colSpan={8}><div className="module-bar"><div><span>Модуль</span><strong>{module}</strong><small>{moduleRows.length} уроков</small></div><div className="module-actions"><button className="icon-button" onClick={()=>onMoveModule(module,-1)} disabled={moduleIndex===0} aria-label={`Переместить модуль ${module} вверх`} title="Переместить модуль вверх"><ArrowUp size={15}/></button><button className="icon-button" onClick={()=>onMoveModule(module,1)} disabled={moduleIndex===visibleModules.length-1} aria-label={`Переместить модуль ${module} вниз`} title="Переместить модуль вниз"><ArrowDown size={15}/></button></div></div></td></tr>{moduleRows.map((r,rowIndex)=>{const displayIndex=orderedRows.findIndex(item=>item.id===r.id);return <tr key={r.id}><td>{displayIndex+1}</td><td><strong>{r.topic || "Без темы"}</strong></td><td>{r.hours}</td><td>{r.criterion ? <b className={`criterion-badge criterion-${r.criterion.toLowerCase()}`}>{r.criterion}</b> : <span className="muted">Нет</span>}</td><td>{r.assessmentName || <span className="dash">—</span>}</td><td>{r.homework || <span className="dash">—</span>}</td><td><span className="time"><Clock3 size={14}/>{r.homeworkMinutes || 0} мин</span></td><td><div className="row-actions"><button className="icon-button" onClick={()=>onMove(r.id,-1)} disabled={rowIndex===0} aria-label={`Переместить ${r.topic} вверх`} title="Переместить вверх"><ArrowUp size={15}/></button><button className="icon-button" onClick={()=>onMove(r.id,1)} disabled={rowIndex===moduleRows.length-1} aria-label={`Переместить ${r.topic} вниз`} title="Переместить вниз"><ArrowDown size={15}/></button><button className="icon-button" onClick={()=>onEdit(r)} aria-label={`Изменить ${r.topic}`} title="Изменить"><Pencil size={15}/></button><button className="icon-button danger-button" onClick={()=>onDelete(r.id)} aria-label={`Удалить ${r.topic}`} title="Удалить урок"><Trash2 size={15}/></button></div></td></tr>})}</React.Fragment>})}</tbody></table></div></section></>;
 }
 
-function Schedule({ weekOffset, setWeekOffset, lessons, className }: { weekOffset:number; setWeekOffset:(n:number)=>void; lessons: Lesson[]; className:string }) {
+function Schedule({ weekOffset, setWeekOffset, classes, classJournals }: { weekOffset:number; setWeekOffset:(n:number)=>void; classes:SchoolClass[]; classJournals:ClassJournal[] }) {
   const months = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
   const weekdays = ["Понедельник","Вторник","Среда","Четверг","Пятница"];
+  const teacherSchedule: Array<{ classId:string; sessions:Array<{ day:number; start:number }> }> = [
+    { classId:"9f", sessions:[{ day:1, start:1 }, { day:3, start:8 }] },
+    { classId:"9g", sessions:[{ day:0, start:1 }, { day:2, start:3 }] },
+    { classId:"9a", sessions:[{ day:0, start:3 }, { day:4, start:1 }] },
+    { classId:"9b", sessions:[{ day:1, start:3 }, { day:3, start:1 }] },
+    { classId:"10v", sessions:[{ day:2, start:1 }, { day:4, start:3 }] },
+    { classId:"10g", sessions:[{ day:0, start:5 }, { day:3, start:3 }] }
+  ];
   const monday = useMemo(() => new Date(Date.UTC(2026, 8, 7 + weekOffset * 7)), [weekOffset]);
   const days = useMemo(() => weekdays.map((name, index) => {
     const date = new Date(monday); date.setUTCDate(monday.getUTCDate() + index);
@@ -690,7 +698,17 @@ function Schedule({ weekOffset, setWeekOffset, lessons, className }: { weekOffse
   const times = ["08:30", "09:20", "10:25", "11:15", "12:20", "13:10", "14:15", "15:05", "16:10"];
   return <section className="schedule-section"><div className="week-control"><button className="icon-button" onClick={()=>setWeekOffset(weekOffset-1)} aria-label="Предыдущая неделя"><ChevronLeft size={18}/></button><div><strong>{weekLabel}</strong><span>{weekOffset === 0 ? "Текущая неделя" : "Учебная неделя"}</span></div><button className="icon-button" onClick={()=>setWeekOffset(weekOffset+1)} aria-label="Следующая неделя"><ChevronRight size={18}/></button><button className="today" onClick={()=>setWeekOffset(0)}>Сегодня</button></div>
   <div className="schedule-grid"><div className="corner">Урок</div>{days.map((day,i)=><div className={`day-head ${i===1&&weekOffset===0?"today-col":""}`} key={day.iso}><strong>{day.name}</strong><span>{day.date.getUTCDate()} {months[day.date.getUTCMonth()]}</span></div>)}
-  {times.map((time,lessonIndex)=><React.Fragment key={time}><div className="lesson-time"><strong>{lessonIndex+1}</strong><span>{time}</span></div>{days.map((day,dayIndex)=>{ const slot = dayIndex===1 ? lessonIndex+1 : dayIndex===3 ? lessonIndex-5 : -1; const lesson = (slot===1||slot===2) ? lessons.filter(l=>l.isoDate===day.iso)[slot-1] : undefined; return <div className={`schedule-cell ${dayIndex===1&&weekOffset===0?"today-col":""}`} key={day.iso}>{lesson && <div className="lesson-card"><span>{className} · Физика {lesson.criterion && `· ${lesson.criterion}`}</span><strong>{lesson.topic}</strong><small>Кабинет 3.14</small></div>}</div>})}</React.Fragment>)}</div></section>;
+  {times.map((time,lessonIndex)=><React.Fragment key={time}><div className="lesson-time"><strong>{lessonIndex+1}</strong><span>{time}</span></div>{days.map((day,dayIndex)=>{
+    const lessonNumber = lessonIndex + 1;
+    const scheduleItem = teacherSchedule.find(item => item.sessions.some(session => session.day === dayIndex && (lessonNumber === session.start || lessonNumber === session.start + 1)));
+    const session = scheduleItem?.sessions.find(item => item.day === dayIndex && (lessonNumber === item.start || lessonNumber === item.start + 1));
+    const schoolClass = classes.find(item => item.id === scheduleItem?.classId);
+    const journal = classJournals.find(item => item.classId === scheduleItem?.classId);
+    const sessionIndex = scheduleItem && session ? scheduleItem.sessions.indexOf(session) * 2 + (lessonNumber - session.start) : -1;
+    const lesson = sessionIndex >= 0 ? journal?.lessons[weekOffset * 4 + sessionIndex] : undefined;
+    const classIndex = schoolClass ? classes.findIndex(item => item.id === schoolClass.id) : 0;
+    return <div className={`schedule-cell ${dayIndex===1&&weekOffset===0?"today-col":""}`} key={day.iso}>{schoolClass && <div className={`lesson-card schedule-class-${classIndex % 6}`}><span>{schoolClass.name} · Физика {lesson?.criterion && `· ${lesson.criterion}`}</span><strong>{lesson?.topic || "Тема не указана"}</strong><small>Кабинет 3.14 · пара</small></div>}</div>;
+  })}</React.Fragment>)}</div></section>;
 }
 
 function Modal({ title, children, onClose, onSave }: { title:string; children:React.ReactNode; onClose:()=>void; onSave:()=>void }) {
