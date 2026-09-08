@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  ArrowDown, ArrowUp, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Download,
-  FileSpreadsheet, GraduationCap, Pencil, Plus, Save, Trash2, Upload, X
+  AlertCircle, ArrowDown, ArrowRight, ArrowUp, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Download,
+  FileSpreadsheet, Flag, GraduationCap, Pencil, Plus, Save, Trash2, Upload, X
 } from "lucide-react";
 import "./styles.css";
 
@@ -24,8 +24,9 @@ declare global {
 type Tab = "journal" | "plan" | "schedule";
 type Criterion = string;
 type FinalCriterion = "A" | "B" | "C" | "D";
+type MetaSkill = "selfManagement" | "criticalThinking" | "communication" | "collaboration";
 type Lesson = { id: number; isoDate: string; date: string; short: string; weekday: string; topic: string; homework: string; homeworkDueDate: string; homeworkMinutes: number; criterion: Criterion; assessmentName: string };
-type Student = { id: number; name: string; grades: Record<number, string>; criterionFinals: Record<FinalCriterion, string> };
+type Student = { id: number; name: string; grades: Record<number, string>; criterionFinals: Record<FinalCriterion, string>; metaSkills?: Record<MetaSkill, string> };
 type PlanRow = { id: number; unit: string; topic: string; hours: number; criterion: Criterion; assessmentName: string; homework: string; homeworkMinutes: number };
 type SchoolClass = { id: string; name: string; level: string };
 type Curriculum = { id: string; name: string; subject: string; level: string; classIds: string[]; rows: PlanRow[]; modules: string[] };
@@ -36,6 +37,13 @@ const SCHOOL_CLASSES: SchoolClass[] = [
   { id: "9f", name: "9Ф", level: "9 класс" }, { id: "9g", name: "9Г", level: "9 класс" },
   { id: "9a", name: "9А", level: "9 класс" }, { id: "9b", name: "9Б", level: "9 класс" },
   { id: "10v", name: "10В", level: "10 класс" }, { id: "10g", name: "10Г", level: "10 класс" }
+];
+
+const META_SKILLS: Array<{ id: MetaSkill; label: string; short: string }> = [
+  { id: "selfManagement", label: "Самоорганизация", short: "Самоорганизация" },
+  { id: "criticalThinking", label: "Критическое мышление", short: "Крит. мышление" },
+  { id: "communication", label: "Коммуникация", short: "Коммуникация" },
+  { id: "collaboration", label: "Сотрудничество", short: "Сотрудничество" }
 ];
 
 const TOPICS = [
@@ -212,19 +220,40 @@ function loadCurricula(): Curriculum[] {
 
 function applyPlanRows(lessons: Lesson[], rows: PlanRow[]): Lesson[] {
   if (!rows.length) return lessons;
-  const sequence = rows.flatMap(row => Array.from({ length: row.hours }, () => row));
-  return lessons.map((lesson, index) => sequence[index] ? {
-    ...lesson,
-    topic: sequence[index].topic,
-    homework: sequence[index].homework,
-    homeworkMinutes: sequence[index].homeworkMinutes,
-    criterion: sequence[index].criterion,
-    assessmentName: sequence[index].assessmentName
-  } : lesson);
+  const sequence = rows.flatMap(row => Array.from({ length: row.hours }, (_, topicLessonIndex) => ({
+    row,
+    topicLessonIndex,
+    topicLessonCount: row.hours
+  })));
+  return lessons.map((lesson, index) => {
+    const slot = sequence[index];
+    if (!slot) return lesson;
+    const { row, topicLessonIndex, topicLessonCount } = slot;
+    const isLastTopicLesson = topicLessonIndex === topicLessonCount - 1;
+    const splitCriterion = row.criterion === "BC" && topicLessonCount >= 2
+      ? (topicLessonIndex === 0 ? "B" : topicLessonIndex === 1 ? "C" : "")
+      : row.criterion;
+    return {
+      ...lesson,
+      topic: row.topic,
+      homework: isLastTopicLesson ? row.homework : "",
+      homeworkMinutes: isLastTopicLesson ? row.homeworkMinutes : 0,
+      criterion: splitCriterion,
+      assessmentName: splitCriterion ? row.assessmentName : ""
+    };
+  });
 }
 
 function lessonsForCurriculum(curriculum?: Curriculum): Lesson[] {
-  return curriculum ? applyPlanRows(LESSONS, curriculum.rows) : LESSONS;
+  const blankLessons = LESSONS.map(lesson => ({
+    ...lesson,
+    topic: "",
+    homework: "",
+    homeworkMinutes: 0,
+    criterion: "",
+    assessmentName: ""
+  }));
+  return curriculum ? applyPlanRows(blankLessons, curriculum.rows) : blankLessons;
 }
 
 function demoStudents(classId: string, classIndex: number): Student[] {
@@ -242,8 +271,14 @@ function demoStudents(classId: string, classIndex: number): Student[] {
 }
 
 function loadClassJournals(curricula: Curriculum[]): ClassJournal[] {
+  const current = loadState<ClassJournal[]>("journal-class-journals-v2", []);
+  if (current.length) return current;
   const saved = loadState<ClassJournal[]>("journal-class-journals-v1", []);
-  if (saved.length) return saved.map(journal => ({ ...journal, lessons: journal.lessons.map(lesson => ({ ...lesson, assessmentName: lesson.assessmentName || (lesson.criterion ? (lesson.criterion === "F" ? "Формирующая работа" : `Оценивание по критерию ${lesson.criterion}`) : "") })) }));
+  if (saved.length) return saved.map(journal => {
+    const curriculum = curricula.find(item => item.classIds.includes(journal.classId));
+    const lessons = curriculum ? applyPlanRows(journal.lessons, curriculum.rows) : journal.lessons;
+    return { ...journal, lessons: lessons.map(lesson => ({ ...lesson, assessmentName: lesson.assessmentName || (lesson.criterion ? (lesson.criterion === "F" ? "Формирующая работа" : `Оценивание по критерию ${lesson.criterion}`) : "") })) };
+  });
   const legacyStudents = loadStudents();
   const legacyLessons = loadState("journal-lessons-v3", LESSONS);
   return SCHOOL_CLASSES.map((schoolClass, index) => ({
@@ -268,7 +303,7 @@ function App() {
   const [importName, setImportName] = useState("");
   const [importStatus, setImportStatus] = useState("");
 
-  useEffect(() => localStorage.setItem("journal-class-journals-v1", JSON.stringify(classJournals)), [classJournals]);
+  useEffect(() => localStorage.setItem("journal-class-journals-v2", JSON.stringify(classJournals)), [classJournals]);
   useEffect(() => localStorage.setItem("journal-active-class-v1", JSON.stringify(activeClassId)), [activeClassId]);
   useEffect(() => localStorage.setItem("journal-curricula-v1", JSON.stringify(curricula)), [curricula]);
   useEffect(() => localStorage.setItem("journal-active-curriculum-v1", JSON.stringify(activeCurriculumId)), [activeCurriculumId]);
@@ -287,7 +322,6 @@ function App() {
     if (!activeCurriculum) return;
     const nextRows = typeof next === "function" ? next(plan) : next;
     setCurricula(items => items.map(curriculum => curriculum.id === activeCurriculum.id ? { ...curriculum, rows: nextRows } : curriculum));
-    if (nextRows.length) setClassJournals(items => items.map(journal => activeCurriculum.classIds.includes(journal.classId) ? { ...journal, lessons: applyPlanRows(journal.lessons, nextRows) } : journal));
   };
   const setModules = (next: string[] | ((items: string[]) => string[])) => setCurricula(items => items.map(curriculum => curriculum.id === activeCurriculum?.id
     ? { ...curriculum, modules: typeof next === "function" ? next(curriculum.modules) : next }
@@ -305,9 +339,20 @@ function App() {
       : student));
   };
 
+  const setMetaSkill = (studentId: number, skill: MetaSkill, value: string) => {
+    const clean = value.replace(/[^0-4]/g, "").slice(-1);
+    setStudents(items => items.map(student => student.id === studentId
+      ? { ...student, metaSkills: { selfManagement: "", criticalThinking: "", communication: "", collaboration: "", ...student.metaSkills, [skill]: clean } }
+      : student));
+  };
+
   const saveLesson = (lesson: Lesson) => {
     setLessons(items => items.map(x => x.id === lesson.id ? lesson : x));
     setSelectedLesson(null);
+  };
+
+  const setLessonTopic = (lessonId: number, topic: string) => {
+    setLessons(items => items.map(lesson => lesson.id === lessonId ? { ...lesson, topic } : lesson));
   };
 
   const savePlan = () => {
@@ -326,8 +371,13 @@ function App() {
   const createCurriculum = () => {
     if (!newCurriculum?.name.trim()) return;
     const id = `curriculum-${Date.now()}`;
-    const curriculum: Curriculum = { id, name: newCurriculum.name.trim(), subject: "Физика", level: newCurriculum.level, classIds: newCurriculum.classIds, rows: [], modules: ["Новый модуль"] };
+    const classIds = newCurriculum.classIds.filter(classId => SCHOOL_CLASSES.some(item => item.id === classId && item.level === newCurriculum.level));
+    const curriculum: Curriculum = { id, name: newCurriculum.name.trim(), subject: "Физика", level: newCurriculum.level, classIds, rows: [], modules: ["Новый модуль"] };
     setCurricula(items => [...items.map(item => ({ ...item, classIds: item.classIds.filter(classId => !curriculum.classIds.includes(classId)) })), curriculum]);
+    const replacementLessons = lessonsForCurriculum(curriculum);
+    setClassJournals(items => items.map(journal => curriculum.classIds.includes(journal.classId)
+      ? { ...journal, lessons: replacementLessons.map(lesson => ({ ...lesson })) }
+      : journal));
     setActiveCurriculumId(id);
     setNewCurriculum(null);
     setImportName("");
@@ -343,12 +393,18 @@ function App() {
 
   const addClassesToCurriculum = () => {
     if (!activeCurriculum || addingClassIds === null) return;
-    const selected = [...new Set(addingClassIds)];
+    const allowedClassIds = new Set(SCHOOL_CLASSES.filter(item => item.level === activeCurriculum.level).map(item => item.id));
+    const selected = [...new Set(addingClassIds)].filter(classId => allowedClassIds.has(classId));
     const newlyAdded = selected.filter(classId => !activeCurriculum.classIds.includes(classId));
     setCurricula(items => items.map(curriculum => curriculum.id === activeCurriculum.id
       ? { ...curriculum, classIds: selected }
       : { ...curriculum, classIds: curriculum.classIds.filter(classId => !selected.includes(classId)) }));
-    if (activeCurriculum.rows.length && newlyAdded.length) setClassJournals(items => items.map(journal => newlyAdded.includes(journal.classId) ? { ...journal, lessons: applyPlanRows(journal.lessons, activeCurriculum.rows) } : journal));
+    if (newlyAdded.length) {
+      const replacementLessons = lessonsForCurriculum(activeCurriculum);
+      setClassJournals(items => items.map(journal => newlyAdded.includes(journal.classId)
+        ? { ...journal, lessons: replacementLessons.map(lesson => ({ ...lesson })) }
+        : journal));
+    }
     setAddingClassIds(null);
   };
 
@@ -498,7 +554,7 @@ function App() {
         {tab === "journal" && <div className="selectors"><label>Класс<select value={activeClass.id} onChange={event => { setActiveClassId(event.target.value); setSelectedLesson(null); }}>{SCHOOL_CLASSES.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Предмет<select><option>Физика</option></select></label></div>}
       </div>
 
-      {tab === "journal" && <Journal className={activeClass.name} curriculumName={linkedCurriculum?.name} students={students} lessons={lessons} setGrade={setGrade} setCriterionFinal={setCriterionFinal} onLesson={setSelectedLesson} />}
+      {tab === "journal" && <Journal className={activeClass.name} curriculumName={linkedCurriculum?.name} students={students} lessons={lessons} plannedLessons={lessonsForCurriculum(linkedCurriculum)} setGrade={setGrade} setCriterionFinal={setCriterionFinal} setMetaSkill={setMetaSkill} setLessonTopic={setLessonTopic} onLesson={setSelectedLesson} />}
       {tab === "plan" && <Plan curricula={curricula} activeCurriculum={activeCurriculum} classes={SCHOOL_CLASSES} onSelect={selectCurriculum} onCreate={()=>setNewCurriculum({ name: "", level: "9 класс", classIds: [] })} onAddClass={()=>setAddingClassIds(activeCurriculum?.classIds || [])} rows={plan} modules={modules} onEdit={setEditingPlan} onAdd={addPlanRow} onAddModule={()=>setNewModuleName("")} onDelete={deletePlanRow} onMove={movePlanRow} onMoveModule={moveModule} importName={importName} importStatus={importStatus} onImport={importPlan} />}
       {tab === "schedule" && <Schedule weekOffset={weekOffset} setWeekOffset={setWeekOffset} lessons={lessons} className={activeClass.name} />}
     </main>
@@ -507,11 +563,12 @@ function App() {
     {editingPlan && <PlanDialog row={editingPlan} setRow={setEditingPlan} modules={modules} onClose={() => setEditingPlan(null)} onSave={savePlan} />}
     {newModuleName !== null && <ModuleDialog name={newModuleName} setName={setNewModuleName} onClose={()=>setNewModuleName(null)} onSave={addModule} />}
     {newCurriculum && <CurriculumDialog draft={newCurriculum} setDraft={setNewCurriculum} classes={SCHOOL_CLASSES} onClose={()=>setNewCurriculum(null)} onSave={createCurriculum} />}
-    {addingClassIds && activeCurriculum && <AddClassesDialog selected={addingClassIds} setSelected={setAddingClassIds} attached={activeCurriculum.classIds} classes={SCHOOL_CLASSES} curricula={curricula} onClose={()=>setAddingClassIds(null)} onSave={addClassesToCurriculum} />}
+    {addingClassIds && activeCurriculum && <AddClassesDialog selected={addingClassIds} setSelected={setAddingClassIds} attached={activeCurriculum.classIds} classes={SCHOOL_CLASSES} curricula={curricula} curriculumLevel={activeCurriculum.level} onClose={()=>setAddingClassIds(null)} onSave={addClassesToCurriculum} />}
   </div>;
 }
 
-function Journal({ className, curriculumName, students, lessons, setGrade, setCriterionFinal, onLesson }: { className:string; curriculumName?:string; students: Student[]; lessons: Lesson[]; setGrade: (s:number,l:number,v:string)=>void; setCriterionFinal: (s:number,c:FinalCriterion,v:string)=>void; onLesson:(l:Lesson)=>void }) {
+function Journal({ className, curriculumName, students, lessons, plannedLessons, setGrade, setCriterionFinal, setMetaSkill, setLessonTopic, onLesson }: { className:string; curriculumName?:string; students: Student[]; lessons: Lesson[]; plannedLessons:Lesson[]; setGrade: (s:number,l:number,v:string)=>void; setCriterionFinal: (s:number,c:FinalCriterion,v:string)=>void; setMetaSkill:(s:number,m:MetaSkill,v:string)=>void; setLessonTopic:(lessonId:number,topic:string)=>void; onLesson:(l:Lesson)=>void }) {
+  const [journalView, setJournalView] = useState<"grades" | "topics">("grades");
   const criteria: FinalCriterion[] = ["A", "B", "C", "D"];
   const monthNames = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
   const monthGroups = lessons.reduce<Array<{ key: string; name: string; count: number }>>((groups, lesson) => {
@@ -521,6 +578,23 @@ function Journal({ className, curriculumName, students, lessons, setGrade, setCr
     else groups.push({ key, name: monthNames[Number(lesson.isoDate.slice(5, 7)) - 1], count: 1 });
     return groups;
   }, []);
+  const hasHomework = (lesson: Lesson) => Boolean(lesson.homework.trim()) && lesson.homework.trim().toLowerCase() !== "нет";
+  const homeworkDueDates = new Set(lessons.filter(hasHomework).map(lesson => dateToIso(lesson.homeworkDueDate)).filter(Boolean));
+  const moveGradeFocus = (event: React.KeyboardEvent<HTMLInputElement>, row: number, column: number) => {
+    const directions: Partial<Record<string, [number, number]>> = {
+      ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0]
+    };
+    const direction = directions[event.key];
+    if (!direction) return;
+    const nextRow = row + direction[0];
+    const nextColumn = column + direction[1];
+    const target = document.querySelector<HTMLInputElement>(`input[data-grade-row="${nextRow}"][data-grade-column="${nextColumn}"]`);
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+    target.select();
+    target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
   const averageFor = (student: Student, criterion: FinalCriterion) => {
     const ids = lessons.filter(l => l.criterion !== "F" && l.criterion.includes(criterion)).map(l => l.id);
     const values = ids.flatMap(id => {
@@ -543,18 +617,42 @@ function Journal({ className, curriculumName, students, lessons, setGrade, setCr
     if (sum <= 27) return "6";
     return "7";
   };
-  return <section className="panel journal-panel">
+  return <div className="journal-workspace"><div className="journal-subtabs" role="tablist" aria-label="Раздел журнала"><button className={journalView === "grades" ? "active" : ""} role="tab" aria-selected={journalView === "grades"} onClick={() => setJournalView("grades")}>Оценки</button><button className={journalView === "topics" ? "active" : ""} role="tab" aria-selected={journalView === "topics"} onClick={() => setJournalView("topics")}>Темы уроков</button></div>{journalView === "topics" ? <LessonTopics className={className} curriculumName={curriculumName} lessons={lessons} plannedLessons={plannedLessons} onTopicChange={setLessonTopic} onLesson={onLesson}/> : <section className="panel journal-panel">
     <div className="panel-head"><div><strong>{className} · 1 семестр</strong><span>8 сентября — 24 декабря · {lessons.length} урока · {curriculumName ? `КТП: ${curriculumName}` : "КТП не назначен"}</span></div><div className="legend"><span><b className="criterion-badge criterion-a">A</b>Знание</span><span><b className="criterion-badge criterion-b">B</b>Исследование</span><span><b className="criterion-badge criterion-c">C</b>Коммуникация</span><span><b className="criterion-badge criterion-d">D</b>Применение</span><span><b className="criterion-badge criterion-f">F</b>Формирующее</span></div></div>
     <div className="table-scroll"><table className="journal-table"><thead>
-      <tr className="month-row"><th className="student sticky" rowSpan={2}>Ученик</th>{monthGroups.map(month => <th className="month-heading" colSpan={month.count} key={month.key}>{month.name}</th>)}<th className="criterion-section average-section" colSpan={4}>Средние баллы</th><th className="criterion-section final-section" colSpan={4}>Итог за критерий</th><th className="total-heading" rowSpan={2}>Сумма</th><th className="semester-heading" rowSpan={2}>Семестр</th></tr>
-      <tr>{lessons.map(lesson => <th className="lesson-heading" key={lesson.id}><button className="date-button" title={`${lesson.date}: ${lesson.topic}`} onClick={() => onLesson(lesson)}><span>{lesson.isoDate.slice(-2)}</span><small>{lesson.weekday}{lesson.criterion && <b className={`mini-criterion criterion-${lesson.criterion.toLowerCase()}`}>{lesson.criterion}</b>}</small></button></th>)}{criteria.map(criterion => <th className={`summary-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-average`}>Ср. {criterion}</th>)}{criteria.map(criterion => <th className={`summary-head final-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-final`}>Итог {criterion}</th>)}</tr>
+      <tr className="month-row"><th className="student sticky" rowSpan={2}>Ученик</th>{monthGroups.map(month => <th className="month-heading" colSpan={month.count} key={month.key}>{month.name}</th>)}<th className="criterion-section average-section" colSpan={4}>Средние баллы</th><th className="criterion-section final-section" colSpan={4}>Итог за критерий</th><th className="total-heading" rowSpan={2}>Сумма</th><th className="semester-heading" rowSpan={2}>Семестр</th><th className="meta-section" colSpan={4}>Метапредметные навыки · 0–4</th></tr>
+      <tr>{lessons.map((lesson, index) => {
+        const topicMissing = !lesson.topic.trim();
+        const homeworkAssigned = hasHomework(lesson);
+        const homeworkDue = homeworkDueDates.has(lesson.isoDate) && lessons.findIndex(item => item.isoDate === lesson.isoDate) === index;
+        return <th className={`lesson-heading${topicMissing ? " no-topic-heading" : ""}`} key={lesson.id}><button className="date-button" title={topicMissing ? `${lesson.date}: тема не указана` : `${lesson.date}: ${lesson.topic}`} onClick={() => onLesson(lesson)}><span>{lesson.isoDate.slice(-2)}</span><small>{lesson.weekday}{lesson.criterion && <b className={`mini-criterion criterion-${lesson.criterion.toLowerCase()}`}>{lesson.criterion}</b>}</small><span className="lesson-markers">{topicMissing && <AlertCircle size={11} className="lesson-marker missing-topic-marker" aria-label="Тема не указана"/>}{homeworkAssigned && <ArrowRight size={12} className="lesson-marker homework-assigned-marker" aria-label="В этот урок задано домашнее задание"/>}{homeworkDue && <Flag size={11} className="lesson-marker homework-due-marker" aria-label="На этот день задано домашнее задание"/>}</span></button></th>;
+      })}{criteria.map(criterion => <th className={`summary-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-average`}>Ср. {criterion}</th>)}{criteria.map(criterion => <th className={`summary-head final-head criterion-${criterion.toLowerCase()}`} key={`${criterion}-final`}>Итог {criterion}</th>)}{META_SKILLS.map(skill => <th className="meta-heading" title={skill.label} key={skill.id}>{skill.short}</th>)}</tr>
     </thead>
     <tbody>{students.map((student, idx) => {
       const sum = finalSum(student);
-      return <tr key={student.id}><td className="student sticky"><span className="row-number">{idx+1}</span>{student.name}</td>{lessons.map(lesson => <td key={lesson.id} className={!lesson.criterion ? "no-assessment" : ""}><input inputMode="numeric" aria-label={`${student.name}, ${lesson.date}${lesson.criterion ? `, критерий ${lesson.criterion}` : ", без оценивания"}`} className={`grade-input score-${student.grades[lesson.id] || "empty"}`} value={student.grades[lesson.id] || ""} onChange={event=>setGrade(student.id,lesson.id,event.target.value)} /></td>)}{criteria.map(criterion => <td className="summary-cell" key={`${criterion}-average`}><strong className={`criterion-average criterion-${criterion.toLowerCase()}`}>{averageFor(student,criterion)}</strong></td>)}{criteria.map(criterion => <td className="summary-cell final-cell" key={`${criterion}-final`}><input inputMode="numeric" aria-label={`${student.name}, итог за критерий ${criterion}`} className={`final-score-input score-${student.criterionFinals[criterion] || "empty"}`} value={student.criterionFinals[criterion]} onChange={event => setCriterionFinal(student.id, criterion, event.target.value)} /></td>)}<td className="sum-cell">{sum ?? "—"}</td><td className="semester-cell"><strong>{semesterGrade(sum)}</strong></td></tr>;
+      return <tr key={student.id}><td className="student sticky"><span className="row-number">{idx+1}</span>{student.name}</td>{lessons.map((lesson, lessonIndex) => <td key={lesson.id} className={!lesson.criterion ? "no-assessment" : ""}><input inputMode="numeric" data-grade-row={idx} data-grade-column={lessonIndex} aria-label={`${student.name}, ${lesson.date}${lesson.criterion ? `, критерий ${lesson.criterion}` : ", без оценивания"}`} className={`grade-input score-${student.grades[lesson.id] || "empty"}`} value={student.grades[lesson.id] || ""} onKeyDown={event => moveGradeFocus(event, idx, lessonIndex)} onChange={event=>setGrade(student.id,lesson.id,event.target.value)} /></td>)}{criteria.map(criterion => <td className="summary-cell" key={`${criterion}-average`}><strong className={`criterion-average criterion-${criterion.toLowerCase()}`}>{averageFor(student,criterion)}</strong></td>)}{criteria.map((criterion, criterionIndex) => {
+        const column = lessons.length + criterionIndex;
+        return <td className="summary-cell final-cell" key={`${criterion}-final`}><input inputMode="numeric" data-grade-row={idx} data-grade-column={column} aria-label={`${student.name}, итог за критерий ${criterion}`} className={`final-score-input score-${student.criterionFinals[criterion] || "empty"}`} value={student.criterionFinals[criterion]} onKeyDown={event => moveGradeFocus(event, idx, column)} onChange={event => setCriterionFinal(student.id, criterion, event.target.value)} /></td>;
+      })}<td className="sum-cell">{sum ?? "—"}</td><td className="semester-cell"><strong>{semesterGrade(sum)}</strong></td>{META_SKILLS.map((skill, skillIndex) => {
+        const column = lessons.length + criteria.length + skillIndex;
+        return <td className="meta-cell" key={skill.id}><input inputMode="numeric" data-grade-row={idx} data-grade-column={column} aria-label={`${student.name}, ${skill.label}`} className={`meta-score-input meta-score-${student.metaSkills?.[skill.id] || "empty"}`} value={student.metaSkills?.[skill.id] || ""} onKeyDown={event => moveGradeFocus(event, idx, column)} onChange={event => setMetaSkill(student.id, skill.id, event.target.value)}/></td>;
+      })}</tr>;
     })}</tbody></table></div>
-    <div className="panel-foot"><span>Оценку 0–8 или «н» можно поставить за любой урок</span><span>Средние считаются по A–D; итог за критерий выставляет учитель</span></div>
-  </section>;
+    <div className="panel-foot"><span>Оценку 0–8 или «н» можно поставить за любой урок</span><span className="journal-mark-legend"><b><ArrowRight size={13}/>ДЗ задано</b><b><Flag size={12}/>ДЗ сдать</b><b><AlertCircle size={12}/>Нет темы</b></span><span>Средние считаются по A–D; итог за критерий выставляет учитель</span></div>
+  </section>}</div>;
+}
+
+function LessonTopics({ className, curriculumName, lessons, plannedLessons, onTopicChange, onLesson }: { className:string; curriculumName?:string; lessons:Lesson[]; plannedLessons:Lesson[]; onTopicChange:(lessonId:number,topic:string)=>void; onLesson:(lesson:Lesson)=>void }) {
+  const plannedById = new Map(plannedLessons.map(lesson => [lesson.id, lesson]));
+  const normalized = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+  return <section className="panel topics-panel"><div className="panel-head topics-panel-head"><div><strong>{className} · темы уроков</strong><span>{curriculumName ? `Сравнение с КТП: ${curriculumName}` : "КТП не назначен"}</span></div><span className="topics-save-note"><Save size={14}/>Изменения сохраняются автоматически</span></div><div className="table-scroll"><table className="topics-table"><thead><tr><th>Дата</th><th>Урок</th><th>По КТП</th><th>По факту</th><th>Статус</th></tr></thead><tbody>{lessons.map((lesson, index) => {
+    const plannedTopic = plannedById.get(lesson.id)?.topic || "";
+    const lessonInDay = lessons.slice(0, index + 1).filter(item => item.isoDate === lesson.isoDate).length;
+    const lessonNumber = lesson.weekday === "вт" ? lessonInDay : lessonInDay + 7;
+    const status = !lesson.topic.trim() ? "empty" : !plannedTopic.trim() ? "outside" : normalized(lesson.topic) === normalized(plannedTopic) ? "match" : "changed";
+    const statusLabel = status === "empty" ? "Не заполнено" : status === "outside" ? "Вне КТП" : status === "match" ? "По плану" : "Изменено";
+    return <tr key={lesson.id}><td><button className="topics-date-button" onClick={() => onLesson(lesson)}><b>{lesson.short}</b><small>{lesson.weekday}</small></button></td><td className="topics-lesson-number">{lessonNumber}</td><td className="planned-topic">{plannedTopic || <span>Тема не указана</span>}</td><td><textarea aria-label={`${lesson.date}, тема по факту`} value={lesson.topic} placeholder="Введите фактическую тему" onChange={event => onTopicChange(lesson.id, event.target.value)}/></td><td><span className={`topic-status topic-status-${status}`}>{statusLabel}</span></td></tr>;
+  })}</tbody></table></div></section>;
 }
 
 function Plan({ curricula, activeCurriculum, classes, onSelect, onCreate, onAddClass, rows, modules, onEdit, onAdd, onAddModule, onDelete, onMove, onMoveModule, importName, importStatus, onImport }: { curricula:Curriculum[]; activeCurriculum?:Curriculum; classes:SchoolClass[]; onSelect:(id:string)=>void; onCreate:()=>void; onAddClass:()=>void; rows: PlanRow[]; modules:string[]; onEdit:(r:PlanRow)=>void; onAdd:()=>void; onAddModule:()=>void; onDelete:(id:number)=>void; onMove:(id:number,direction:-1|1)=>void; onMoveModule:(name:string,direction:-1|1)=>void; importName:string; importStatus:string; onImport:(file?:File)=>void }) {
@@ -619,14 +717,15 @@ function ModuleDialog({ name, setName, onClose, onSave }: { name:string; setName
 
 function CurriculumDialog({ draft, setDraft, classes, onClose, onSave }: { draft:NewCurriculum; setDraft:(value:NewCurriculum)=>void; classes:SchoolClass[]; onClose:()=>void; onSave:()=>void }) {
   const toggleClass = (id: string) => setDraft({ ...draft, classIds: draft.classIds.includes(id) ? draft.classIds.filter(item => item !== id) : [...draft.classIds, id] });
-  return <Modal title="Создать КТП" onClose={onClose} onSave={onSave}><label className="field">Название КТП<input autoFocus value={draft.name} placeholder="Например, Физика 8 · Базовый уровень" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label className="field">Уровень изучения<select value={draft.level} onChange={event => setDraft({ ...draft, level: event.target.value })}><option>8 класс</option><option>9 класс</option><option>10 класс</option><option>11 класс</option></select></label><fieldset className="class-field"><legend>Привязать классы</legend><div className="class-options">{classes.map(item => <label className={draft.classIds.includes(item.id) ? "selected" : ""} key={item.id}><input type="checkbox" checked={draft.classIds.includes(item.id)} onChange={() => toggleClass(item.id)}/><span><b>{item.name}</b><small>{item.level}</small></span></label>)}</div></fieldset></Modal>;
+  const parallelClasses = classes.filter(item => item.level === draft.level);
+  return <Modal title="Создать КТП" onClose={onClose} onSave={onSave}><label className="field">Название КТП<input autoFocus value={draft.name} placeholder="Например, Физика 8 · Базовый уровень" onChange={event => setDraft({ ...draft, name: event.target.value })}/></label><label className="field">Уровень изучения<select value={draft.level} onChange={event => setDraft({ ...draft, level: event.target.value, classIds: [] })}><option>8 класс</option><option>9 класс</option><option>10 класс</option><option>11 класс</option></select></label><fieldset className="class-field"><legend>Привязать классы этой параллели</legend><div className="class-options">{parallelClasses.map(item => <label className={draft.classIds.includes(item.id) ? "selected" : ""} key={item.id}><input type="checkbox" checked={draft.classIds.includes(item.id)} onChange={() => toggleClass(item.id)}/><span><b>{item.name}</b><small>{item.level}</small></span></label>)}</div>{!parallelClasses.length && <div className="class-empty">Для этой параллели пока нет классов</div>}</fieldset></Modal>;
 }
 
-function AddClassesDialog({ selected, setSelected, attached, classes, curricula, onClose, onSave }: { selected:string[]; setSelected:(value:string[])=>void; attached:string[]; classes:SchoolClass[]; curricula:Curriculum[]; onClose:()=>void; onSave:()=>void }) {
+function AddClassesDialog({ selected, setSelected, attached, classes, curricula, curriculumLevel, onClose, onSave }: { selected:string[]; setSelected:(value:string[])=>void; attached:string[]; classes:SchoolClass[]; curricula:Curriculum[]; curriculumLevel:string; onClose:()=>void; onSave:()=>void }) {
   const [filter, setFilter] = useState("");
   const toggleClass = (id: string) => setSelected(selected.includes(id) ? selected.filter(item => item !== id) : [...selected, id]);
-  const filteredClasses = classes.filter(item => `${item.name} ${item.level}`.toLowerCase().includes(filter.trim().toLowerCase()));
-  return <Modal title="Классы КТП" onClose={onClose} onSave={onSave}><p className="modal-hint">Отметьте нужные классы или снимите отметку, чтобы убрать класс из КТП. Класс из другого КТП будет перенесён.</p><label className="field class-search">Фильтр по классу<input value={filter} placeholder="Например, 9Ф" onChange={event => setFilter(event.target.value)}/></label><div className="class-options class-binding-options">{filteredClasses.map(item => {
+  const filteredClasses = classes.filter(item => item.level === curriculumLevel && `${item.name} ${item.level}`.toLowerCase().includes(filter.trim().toLowerCase()));
+  return <Modal title="Классы КТП" onClose={onClose} onSave={onSave}><p className="modal-hint">Можно выбрать только классы параллели «{curriculumLevel}». Класс из другого КТП этой параллели будет перенесён.</p><label className="field class-search">Фильтр по классу<input value={filter} placeholder="Например, 9Ф" onChange={event => setFilter(event.target.value)}/></label><div className="class-options class-binding-options">{filteredClasses.map(item => {
     const isAttached = attached.includes(item.id);
     const linked = curricula.find(curriculum => curriculum.classIds.includes(item.id));
     const isSelected = selected.includes(item.id);
