@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.artifacts/
+artifact-runtime
+outputs/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
